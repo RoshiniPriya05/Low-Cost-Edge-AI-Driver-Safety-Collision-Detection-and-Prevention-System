@@ -1,0 +1,166 @@
+import cv2
+import time
+import random
+import numpy as np
+
+# ==============================
+# REACTION TIME TEST
+# ==============================
+
+def reaction_test():
+
+    screen = np.ones((400,700,3),dtype=np.uint8)*255
+
+    cv2.putText(screen,"Get Ready...",
+                (200,200),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,(0,0,0),2)
+
+    cv2.imshow("Driver Fitness Test",screen)
+    cv2.waitKey(1)
+
+    wait_time = random.uniform(2,5)
+    time.sleep(wait_time)
+
+    screen[:] = (0,255,0)
+
+    cv2.putText(screen,"PRESS SPACE!",
+                (200,200),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,(0,0,0),2)
+
+    start = time.time()
+
+    while True:
+
+        cv2.imshow("Driver Fitness Test",screen)
+        key = cv2.waitKey(1)
+
+        if key == 32:   # space key
+            reaction = time.time() - start
+            break
+
+    cv2.destroyWindow("Driver Fitness Test")
+
+    print("Reaction Time:",round(reaction,3),"seconds")
+
+    if reaction < 0.35:
+        return 40
+    elif reaction < 0.6:
+        return 25
+    else:
+        return 0
+
+
+# ==============================
+# ATTENTION TEST
+# ==============================
+
+def attention_test():
+
+    arrows = ["LEFT","RIGHT","UP","DOWN"]
+
+    key_map = {
+        "LEFT":81,
+        "RIGHT":83,
+        "UP":82,
+        "DOWN":84
+    }
+
+    score = 0
+
+    for i in range(5):
+
+        arrow = random.choice(arrows)
+
+        screen = np.ones((400,700,3),dtype=np.uint8)*255
+
+        cv2.putText(screen,f"Press {arrow}",
+                    (200,200),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,(0,0,0),2)
+
+        start = time.time()
+
+        while True:
+
+            cv2.imshow("Attention Test",screen)
+
+            key = cv2.waitKey(1)
+
+            if key != -1:
+
+                reaction = time.time()-start
+
+                if key == key_map[arrow] and reaction < 1.2:
+                    score += 6
+                break
+
+    cv2.destroyWindow("Attention Test")
+
+    print("Attention Score:",score)
+
+    return score
+
+
+# ==============================
+# DRIVER FITNESS TEST
+# ==============================
+
+def driver_fitness_test():
+
+    print("\nStarting Driver Fitness Test\n")
+
+    reaction_score = reaction_test()
+
+    attention_score = attention_test()
+
+    total_score = reaction_score + attention_score
+
+    print("\nDriver Fitness Score:",total_score,"/ 70")
+
+    if total_score >= 40:
+
+        print("\nPASS - Driver Fit to Drive")
+
+        screen = np.ones((400,700,3),dtype=np.uint8)*255
+        cv2.putText(screen,"DRIVER FIT",
+                    (220,200),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,(0,200,0),3)
+
+        cv2.imshow("Result",screen)
+        cv2.waitKey(2000)
+        cv2.destroyAllWindows()
+
+        return True
+
+    else:
+
+        print("\nFAIL - Driver Not Fit")
+
+        screen = np.ones((400,700,3),dtype=np.uint8)*255
+        cv2.putText(screen,"DRIVER NOT FIT",
+                    (150,200),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,(0,0,255),3)
+
+        cv2.imshow("Result",screen)
+        cv2.waitKey(3000)
+        cv2.destroyAllWindows()
+
+        return False
+
+
+# ==============================
+# MAIN
+# ==============================
+
+if __name__ == "__main__":
+
+    result = driver_fitness_test()
+
+    if result:
+        print("Starting Driving System...")
+    else:
+        print("Vehicle Locked / Alert Fleet Owner")

@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Edge AI Driver Safety — Live Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow+Condensed:wght@300;400;600;700;800&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+:root {
+ --purple-deep:#2D1B4E;--purple-mid:#3D2666;--purple-panel:#1A1030;
+ --yellow:#F5C400;--yellow-soft:rgba(245,196,0,0.15);
+ --green:#00E87A;--green-soft:rgba(0,232,122,0.12);
+ --red:#FF2D55;--red-soft:rgba(255,45,85,0.12);
+ --orange:#FF8C00;--orange-soft:rgba(255,140,0,0.12);
+ --bg:#0A0716;--panel:#130E24;--border:#2D1B4E;
+ --text:#E8E0F5;--muted:#6B5C8A;
+ --mono:'Space Mono',monospace;--head:'Barlow Condensed',sans-serif;--body:'Barlow',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--bg);color:var(--text);font-family:var(--body);display:flex;flex-direction:column;}
+
+/* ── VIEW SYSTEM ──────────────────────────────────────────────── */
+.view{display:none;flex:1;overflow:hidden;flex-direction:column;}
+.view.active{display:flex;}
+
+/* ── CONNECT MODAL ────────────────────────────────────────────── */
+#modal-overlay{position:fixed;inset:0;background:rgba(10,7,22,0.96);display:flex;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(4px);}
+.modal-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:36px 40px;width:380px;text-align:center;}
+.modal-logo{font-family:var(--head);font-weight:800;font-size:26px;color:var(--yellow);letter-spacing:2px;margin-bottom:4px;}
+.modal-sub{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:2px;margin-bottom:28px;}
+.modal-label{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;text-align:left;margin-bottom:6px;}
+.modal-input{width:100%;background:#0A0716;border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 14px;outline:none;transition:border-color 0.2s;margin-bottom:18px;}
+.modal-input:focus{border-color:var(--yellow);}
+.modal-btn{width:100%;background:var(--yellow);color:var(--purple-deep);font-family:var(--head);font-weight:800;font-size:15px;letter-spacing:2px;text-transform:uppercase;border:none;border-radius:5px;padding:12px;cursor:pointer;transition:opacity 0.2s;}
+.modal-btn:hover{opacity:0.85;}
+.modal-note{font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:14px;line-height:1.6;}
+#conn-status{font-family:var(--mono);font-size:10px;margin-top:12px;min-height:16px;}
+.cs-ok{color:var(--green);}.cs-err{color:var(--red);}.cs-wait{color:var(--yellow);}
+
+/* ── HEADER ───────────────────────────────────────────────────── */
+header{background:var(--purple-deep);border-bottom:2px solid var(--yellow);height:54px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0;}
+.h-left{display:flex;align-items:center;gap:12px;}
+.h-badge{width:32px;height:32px;background:var(--yellow);border-radius:5px;display:flex;align-items:center;justify-content:center;font-family:var(--head);font-weight:800;font-size:15px;color:var(--purple-deep);flex-shrink:0;}
+.h-title{font-family:var(--head);font-weight:700;font-size:19px;color:#fff;line-height:1;}
+.h-sub{font-family:var(--mono);font-size:8px;color:var(--yellow);letter-spacing:1.5px;margin-top:2px;}
+.h-right{display:flex;align-items:center;gap:18px;}
+.h-live{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;letter-spacing:1px;color:var(--muted);}
+.h-live.connected{color:var(--green);}
+.h-live::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;animation:blink 1.4s infinite;}
+.h-time{font-family:var(--mono);font-size:12px;color:var(--muted);}
+.h-ip{font-family:var(--mono);font-size:9px;color:var(--muted);cursor:pointer;border:1px solid var(--border);border-radius:3px;padding:2px 8px;}
+.h-ip:hover{border-color:var(--yellow);color:var(--yellow);}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0.2;}}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+@keyframes ca-warn{0%,100%{box-shadow:0 0 0 0 rgba(245,196,0,0);}50%{box-shadow:0 0 16px 2px rgba(245,196,0,0.18);}}
+@keyframes ca-danger{0%,100%{box-shadow:0 0 0 0 rgba(255,45,85,0);}50%{box-shadow:0 0 22px 4px rgba(255,45,85,0.28);}}
+
+/* ══════════════════════════════════════════════════════════════
+ VIEW 1 — DRUNK TEST
+══════════════════════════════════════════════════════════════ */
+#view-drunk{background:var(--bg);align-items:center;justify-content:center;padding:30px 20px;}
+.drunk-wrap{display:grid;grid-template-columns:1fr 1fr;gap:32px;width:100%;max-width:980px;align-items:center;}
+
+.drunk-cam-box{background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--border);position:relative;aspect-ratio:4/3;}
+.drunk-cam-box img{width:100%;height:100%;object-fit:cover;display:block;}
+.cam-offline-inner{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;}
+.cam-offline-icon2{width:44px;height:32px;border:1.5px solid var(--border);border-radius:4px;opacity:0.4;}
+.cam-offline-txt2{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;}
+.live-chip{position:absolute;top:8px;left:8px;font-family:var(--mono);font-size:8px;color:var(--green);letter-spacing:1px;background:rgba(10,7,22,0.85);padding:2px 8px;border-radius:2px;border:1px solid rgba(0,232,122,0.3);}
+.step-chip{position:absolute;top:8px;right:8px;font-family:var(--mono);font-size:8px;color:var(--muted);background:rgba(10,7,22,0.85);padding:2px 8px;border-radius:2px;border:1px solid var(--border);}
+
+.drunk-panel{display:flex;flex-direction:column;gap:18px;animation:fadeIn 0.4s ease;}
+.pre-title{font-family:var(--head);font-weight:800;font-size:30px;color:#fff;letter-spacing:2px;line-height:1;}
+.pre-step-label{font-family:var(--mono);font-size:9px;color:var(--yellow);letter-spacing:2px;margin-top:5px;}
+
+.instruction-box{background:rgba(45,27,78,0.4);border:1px solid var(--border);border-radius:8px;padding:16px 18px;}
+.instruction-lbl{font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:1.5px;margin-bottom:8px;}
+.instruction-txt{font-family:var(--head);font-weight:700;font-size:17px;color:var(--yellow);letter-spacing:0.5px;line-height:1.4;min-height:50px;transition:all 0.3s;}
+
+.sensor-box{border-radius:8px;padding:14px 18px;border:1.5px solid var(--border);background:rgba(19,14,36,0.6);transition:all 0.3s;}
+.sensor-box.idle {border-color:var(--border);}
+.sensor-box.testing{border-color:var(--yellow);background:rgba(245,196,0,0.06);animation:ca-warn 1.2s infinite;}
+.sensor-box.pass {border-color:var(--green);background:var(--green-soft);}
+.sensor-box.fail {border-color:var(--red);background:var(--red-soft);animation:ca-danger 0.8s infinite;}
+.sensor-lbl{font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:1.5px;margin-bottom:6px;}
+.sensor-val{font-family:var(--head);font-weight:800;font-size:24px;letter-spacing:2px;color:var(--muted);transition:color 0.3s;}
+.sensor-box.testing .sensor-val{color:var(--yellow);}
+.sensor-box.pass .sensor-val{color:var(--green);}
+.sensor-box.fail .sensor-val{color:var(--red);}
+.sensor-detail{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;transition:color 0.3s;}
+.sensor-box.pass .sensor-detail{color:rgba(0,232,122,0.7);}
+.sensor-box.fail .sensor-detail{color:rgba(255,45,85,0.7);}
+
+.pf-btns{display:flex;gap:10px;}
+.pf-btn{font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:2px;text-transform:uppercase;padding:10px 22px;border-radius:5px;cursor:pointer;border:1.5px solid;transition:opacity 0.2s;}
+.pf-btn:hover{opacity:0.75;}
+.pf-btn:disabled{opacity:0.2;cursor:default;}
+.pf-btn-retry {color:var(--yellow);border-color:var(--yellow);background:var(--yellow-soft);}
+.pf-btn-proceed{color:var(--green); border-color:var(--green); background:var(--green-soft);}
+
+/* ══════════════════════════════════════════════════════════════
+ VIEW 2 — FITNESS TEST
+══════════════════════════════════════════════════════════════ */
+#view-fitness{background:var(--bg);align-items:center;justify-content:center;padding:24px 20px;}
+.fitness-wrap{display:grid;grid-template-columns:1fr 1fr;gap:32px;width:100%;max-width:980px;align-items:center;}
+
+.fit-cam-box{background:#000;border-radius:10px;overflow:hidden;border:1px solid var(--border);position:relative;aspect-ratio:4/3;}
+.fit-cam-box img{width:100%;height:100%;object-fit:cover;display:block;}
+.fit-cam-chip{position:absolute;bottom:8px;left:8px;font-family:var(--mono);font-size:8px;color:var(--muted);background:rgba(10,7,22,0.85);padding:3px 8px;border-radius:2px;border:1px solid var(--border);}
+
+.fit-panel{display:flex;flex-direction:column;gap:14px;animation:fadeIn 0.4s ease;}
+.fit-checklist{display:flex;flex-direction:column;gap:7px;}
+.fit-step{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:7px;border:1px solid var(--border);background:rgba(45,27,78,0.2);transition:all 0.3s;}
+.fit-step.running{border-color:var(--yellow);background:rgba(245,196,0,0.07);box-shadow:0 0 14px rgba(245,196,0,0.1);}
+.fit-step.pass {border-color:var(--green);background:var(--green-soft);}
+.fit-step.fail {border-color:var(--red);background:var(--red-soft);}
+.fit-step-icon{font-size:17px;width:24px;text-align:center;flex-shrink:0;}
+.fit-step-body{flex:1;min-width:0;}
+.fit-step-label{font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);transition:color 0.3s;}
+.fit-step.running .fit-step-label{color:var(--yellow);}
+.fit-step.pass .fit-step-label{color:var(--green);}
+.fit-step.fail .fit-step-label{color:var(--red);}
+.fit-step-detail{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color 0.3s;}
+.fit-step.running .fit-step-detail{color:rgba(245,196,0,0.7);}
+.fit-step.pass .fit-step-detail{color:rgba(0,232,122,0.6);}
+.fit-step.fail .fit-step-detail{color:rgba(255,45,85,0.6);}
+.fit-step-badge{font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px;letter-spacing:1px;flex-shrink:0;border:1px solid var(--border);color:var(--muted);transition:all 0.3s;}
+.fit-step.running .fit-step-badge{color:var(--yellow);border-color:var(--yellow);animation:blink 0.9s infinite;}
+.fit-step.pass .fit-step-badge{color:#000;background:var(--green);border-color:var(--green);}
+.fit-step.fail .fit-step-badge{color:#fff;background:var(--red);border-color:var(--red);}
+
+.fit-score-row{display:flex;align-items:center;gap:10px;}
+.fit-score-lbl{font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:1.5px;white-space:nowrap;}
+.fit-score-track{flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden;}
+.fit-score-fill{height:100%;border-radius:3px;transition:width 0.5s,background 0.4s;background:var(--green);}
+.fit-score-val{font-family:var(--head);font-weight:800;font-size:16px;color:var(--yellow);}
+.fit-message{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.5px;min-height:14px;}
+.fit-result{font-family:var(--head);font-weight:800;font-size:20px;letter-spacing:2px;text-transform:uppercase;text-align:center;padding:10px 20px;border-radius:7px;border:2px solid;display:none;margin-top:4px;}
+.fit-result.pass{display:block;color:var(--green);border-color:var(--green);background:var(--green-soft);}
+.fit-result.fail{display:block;color:var(--red);border-color:var(--red);background:var(--red-soft);animation:pulse 0.8s infinite;}
+
+/* ══════════════════════════════════════════════════════════════
+ VIEW 3 — MAIN DASHBOARD (all original styles)
+══════════════════════════════════════════════════════════════ */
+.layout{flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 1fr 220px;grid-template-rows:1fr auto;gap:10px;padding:10px;}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:7px;overflow:hidden;display:flex;flex-direction:column;}
+.phead{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-bottom:1px solid var(--border);background:var(--purple-deep);flex-shrink:0;}
+.ptitle{font-family:var(--head);font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--yellow);}
+.ptag{font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:1px;}
+.pbody{flex:1;overflow:hidden;position:relative;}
+.cam-wrap{width:100%;height:100%;position:relative;background:#000;}
+.cam-wrap img{width:100%;height:100%;object-fit:cover;display:block;}
+.cam-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.cam-offline{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#030109;}
+.cam-offline-icon{width:44px;height:32px;border:1.5px solid var(--border);border-radius:4px;opacity:0.4;position:relative;}
+.cam-offline-icon::before{content:'';position:absolute;right:-9px;top:50%;transform:translateY(-50%);border-left:9px solid var(--border);border-top:6px solid transparent;border-bottom:6px solid transparent;opacity:0.4;}
+.cam-offline-txt{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1.5px;}
+.cam-scanlines{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 4px);}
+.cam-chips{position:absolute;top:8px;left:8px;display:flex;flex-direction:column;gap:3px;pointer-events:none;z-index:2;}
+.chip{display:flex;align-items:center;gap:5px;background:rgba(10,7,22,0.82);border:1px solid var(--border);border-radius:3px;padding:2px 7px;font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:0.5px;}
+.chip .v{font-weight:700;}
+.cv-ok{color:var(--green);}.cv-warn{color:var(--yellow);}.cv-danger{color:var(--red);}
+.d-badge{position:absolute;bottom:8px;right:8px;font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:2px;text-transform:uppercase;padding:4px 12px;border-radius:4px;border:1.5px solid;pointer-events:none;background:rgba(10,7,22,0.88);transition:color 0.3s,border-color 0.3s;z-index:2;}
+.db-alert{color:var(--green);border-color:var(--green);}
+.db-warn{color:var(--yellow);border-color:var(--yellow);animation:pulse 1s ease-in-out infinite;}
+.db-danger{color:var(--red);border-color:var(--red);animation:pulse 0.6s ease-in-out infinite;}
+.db-noface{color:var(--muted);border-color:var(--muted);}
+.risk-badge{position:absolute;bottom:8px;left:8px;background:rgba(10,7,22,0.88);border:1.5px solid;border-radius:4px;padding:5px 10px;pointer-events:none;min-width:150px;transition:border-color 0.3s;z-index:2;}
+.rb-label{font-family:var(--mono);font-size:7px;color:var(--muted);letter-spacing:1.5px;margin-bottom:4px;}
+.rb-track{height:3px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:4px;}
+.rb-fill{height:100%;border-radius:2px;transition:width 0.4s,background 0.4s;}
+.rb-val{font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:2px;transition:color 0.3s;}
+.dist-badge{position:absolute;bottom:8px;right:8px;background:rgba(10,7,22,0.88);border:1.5px solid var(--border);border-radius:4px;padding:5px 10px;pointer-events:none;min-width:110px;z-index:2;transition:border-color 0.3s;}
+.dist-badge .db-lbl{font-family:var(--mono);font-size:7px;color:var(--muted);letter-spacing:1.5px;}
+.dist-badge .db-val{font-family:var(--head);font-weight:800;font-size:18px;line-height:1.1;transition:color 0.3s;}
+.dist-badge .db-sub{font-family:var(--mono);font-size:7px;color:var(--muted);margin-top:2px;}
+.blind-badge{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(10,7,22,0.88);border:1.5px solid var(--border);border-radius:4px;padding:3px 12px;pointer-events:none;font-family:var(--head);font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;z-index:2;transition:all 0.3s;opacity:0;}
+.blind-badge.visible{opacity:1;border-color:var(--yellow);color:var(--yellow);}
+.obj-count{position:absolute;top:8px;right:8px;background:rgba(10,7,22,0.82);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:8px;color:var(--muted);padding:3px 8px;pointer-events:none;z-index:2;}
+.obj-count span{color:var(--text);font-weight:700;}
+.road-inactive{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(10,7,22,0.92);z-index:3;}
+.road-inactive-icon{font-size:32px;}
+.road-inactive-txt{font-family:var(--head);font-weight:700;font-size:14px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;}
+.road-inactive-sub{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:1px;opacity:0.6;}
+.stop-btn{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;padding:3px 10px;border-radius:3px;cursor:pointer;border:1.5px solid var(--red);color:var(--red);background:var(--red-soft);transition:opacity 0.2s;}
+.stop-btn:hover{opacity:0.75;}
+.stop-btn:disabled{opacity:0.3;cursor:default;}
+.fatigue-bars{position:absolute;bottom:40px;left:8px;display:flex;flex-direction:column;gap:3px;pointer-events:none;min-width:130px;z-index:2;}
+.fb-row{display:flex;align-items:center;gap:5px;}
+.fb-label{font-family:var(--mono);font-size:7px;color:var(--muted);width:52px;letter-spacing:0.5px;}
+.fb-track{flex:1;height:4px;background:rgba(45,27,78,0.7);border-radius:2px;overflow:hidden;}
+.fb-fill{height:100%;border-radius:2px;transition:width 0.4s;}
+.fb-count{font-family:var(--mono);font-size:7px;color:var(--muted);width:20px;text-align:right;}
+.combined-bar{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(10,7,22,0.88);border:1px solid var(--border);border-radius:4px;padding:3px 10px;pointer-events:none;display:flex;align-items:center;gap:6px;white-space:nowrap;z-index:2;}
+.cb-label{font-family:var(--mono);font-size:7px;color:var(--muted);letter-spacing:1px;}
+.cb-pips{display:flex;gap:3px;}
+.cb-pip{width:10px;height:10px;border-radius:2px;border:1px solid var(--border);transition:background 0.3s,border-color 0.3s;}
+.cb-pip.filled{background:var(--red);border-color:var(--red);}
+.alerts-panel{grid-column:1/3;}
+.alerts-inner{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:8px 10px;}
+.alert-card{border:1px solid var(--border);border-radius:6px;padding:10px 12px;transition:all 0.25s;position:relative;overflow:hidden;}
+.alert-card.off{background:rgba(19,14,36,0.5);opacity:0.4;}
+.alert-card.warn{background:var(--yellow-soft);border-color:var(--yellow);animation:ca-warn 1.5s ease-in-out infinite;}
+.alert-card.danger{background:var(--red-soft);border-color:var(--red);animation:ca-danger 0.7s ease-in-out infinite;}
+.alert-card.info{background:var(--green-soft);border-color:var(--green);}
+.ac-dot{position:absolute;top:8px;right:8px;width:7px;height:7px;border-radius:50%;background:var(--muted);}
+.alert-card.warn .ac-dot{background:var(--yellow);}
+.alert-card.danger .ac-dot{background:var(--red);animation:blink 0.6s infinite;}
+.alert-card.info .ac-dot{background:var(--green);}
+.ac-icon{font-size:22px;margin-bottom:6px;}
+.ac-name{font-family:var(--head);font-weight:800;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
+.alert-card.warn .ac-name{color:var(--yellow);}
+.alert-card.danger .ac-name{color:var(--red);}
+.alert-card.info .ac-name{color:var(--green);}
+.ac-desc{font-family:var(--mono);font-size:8px;color:var(--muted);margin-top:4px;line-height:1.5;}
+.alert-card.warn .ac-desc{color:rgba(245,196,0,0.6);}
+.alert-card.danger .ac-desc{color:rgba(255,45,85,0.6);}
+.right-col{grid-column:3;grid-row:1/3;display:flex;flex-direction:column;gap:10px;}
+.status-list{padding:8px 10px;display:flex;flex-direction:column;gap:5px;}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-radius:4px;border-left:3px solid var(--muted);background:rgba(45,27,78,0.25);transition:border-left-color 0.3s;}
+.srow.ok{border-left-color:var(--green);}
+.srow.warn{border-left-color:var(--yellow);}
+.srow.err{border-left-color:var(--red);}
+.sn{font-size:11px;font-weight:500;color:var(--text);}
+.sv{font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:2px;letter-spacing:0.5px;transition:background 0.3s,color 0.3s;}
+.ok .sv{background:var(--green-soft);color:var(--green);}
+.warn .sv{background:rgba(245,196,0,0.12);color:var(--yellow);}
+.err .sv{background:var(--red-soft);color:var(--red);}
+.metrics-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px 10px;}
+.mc{background:rgba(45,27,78,0.35);border:1px solid var(--border);border-radius:5px;padding:8px 10px;position:relative;overflow:hidden;}
+.mc-lbl{font-family:var(--mono);font-size:7px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;}
+.mc-val{font-family:var(--head);font-weight:800;font-size:22px;line-height:1;color:var(--yellow);letter-spacing:-0.5px;transition:color 0.3s;}
+.mc-unit{font-family:var(--mono);font-size:7px;color:var(--muted);margin-top:2px;letter-spacing:0.5px;}
+.mc-bar{position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--border);}
+.mc-bar-fill{height:100%;transition:width 0.4s,background 0.4s;}
+.obj-list{padding:6px 10px;display:flex;flex-direction:column;gap:4px;overflow-y:auto;flex:1;}
+.obj-row{display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:3px;background:rgba(45,27,78,0.25);border-left:2px solid var(--border);}
+.obj-name{font-size:11px;font-weight:500;}
+.obj-right{display:flex;align-items:center;gap:4px;}
+.obj-dist{font-family:var(--mono);font-size:8px;padding:1px 5px;border-radius:2px;font-weight:700;}
+.obj-blind{font-family:var(--mono);font-size:7px;color:var(--yellow);border:1px solid rgba(245,196,0,0.3);border-radius:2px;padding:0px 3px;}
+.obj-risk-high .obj-name{color:var(--red);}
+.obj-risk-high .obj-dist{background:var(--red-soft);color:var(--red);}
+.obj-risk-high{border-left-color:var(--red);}
+.obj-risk-med .obj-name{color:var(--yellow);}
+.obj-risk-med .obj-dist{background:var(--yellow-soft);color:var(--yellow);}
+.obj-risk-med{border-left-color:var(--yellow);}
+.obj-risk-low .obj-name{color:var(--green);}
+.obj-risk-low .obj-dist{background:var(--green-soft);color:var(--green);}
+.obj-risk-low{border-left-color:var(--green);}
+.obj-empty{font-family:var(--mono);font-size:9px;color:var(--muted);padding:6px 8px;letter-spacing:1px;}
+.uptime-bar{padding:6px 10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.uptime-lbl{font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:1.5px;}
+.uptime-val{font-family:var(--head);font-weight:700;font-size:14px;color:var(--text);letter-spacing:1px;}
+</style>
+</head>
+<body>
+
+<!-- ══ CONNECT MODAL ════════════════════════════════════════════ -->
+<div id="modal-overlay">
+ <div class="modal-box">
+ <div class="modal-logo">EDGE AI SAFETY</div>
+ <div class="modal-sub">● RASPBERRY PI REAL-TIME DASHBOARD</div>
+ <div class="modal-label">Raspberry Pi IP Address</div>
+ <input class="modal-input" id="pi-ip" type="text" placeholder="e.g. 192.168.1.104" value=""/>
+ <div class="modal-label">Port</div>
+ <input class="modal-input" id="pi-port" type="text" placeholder="5050" value="5050"/>
+ <button class="modal-btn" onclick="connect()">Connect to Pi</button>
+ <div id="conn-status"></div>
+ <div class="modal-note">Make sure <strong>app.py</strong> is running on the Pi.<br/>Both devices must be on the same WiFi network.</div>
+ </div>
+</div>
+
+<!-- ══ HEADER ══════════════════════════════════════════════════ -->
+<header>
+ <div class="h-left">
+ <div class="h-badge">AI</div>
+ <div>
+ <div class="h-title">Edge AI Driver Safety Monitoring System</div>
+ <div class="h-sub" id="h-sub-text">● Pre-Drive Assessment Phase</div>
+ </div>
+ </div>
+ <div class="h-right">
+ <div class="h-live" id="live-indicator">Connecting…</div>
+ <span class="h-ip" onclick="disconnect()" title="Click to disconnect" id="pi-label">--</span>
+ <div class="h-time" id="clock">--:--:--</div>
+ </div>
+</header>
+
+<!-- ══ VIEW 1 — DRUNK TEST ══════════════════════════════════════ -->
+<div class="view" id="view-drunk">
+ <div class="drunk-wrap">
+
+ <div class="drunk-cam-box">
+ <div class="cam-offline-inner" id="drunk-offline">
+ <div class="cam-offline-icon2"></div>
+ <div class="cam-offline-txt2">AWAITING FEED</div>
+ </div>
+ <img id="drunk-cam-img" src="" style="display:none;" alt="Driver feed"/>
+ <div class="live-chip" id="drunk-live-chip" style="display:none;">● LIVE</div>
+ <div class="step-chip">STEP 1 / 2</div>
+ </div>
+
+ <div class="drunk-panel">
+ <div>
+ <div class="pre-title">Alcohol Check</div>
+ <div class="pre-step-label">● PRE-DRIVE ASSESSMENT · STEP 1 OF 2</div>
+ </div>
+
+ <div class="instruction-box">
+ <div class="instruction-lbl">INSTRUCTION</div>
+ <div class="instruction-txt" id="drunk-instruction">Waiting for system to initialise…</div>
+ </div>
+
+ <div class="sensor-box idle" id="drunk-sensor-box">
+ <div class="sensor-lbl">MQ3 ALCOHOL SENSOR · GPIO 17</div>
+ <div class="sensor-val" id="drunk-sensor-val">STANDBY</div>
+ <div class="sensor-detail" id="drunk-sensor-detail">Awaiting breath sample…</div>
+ </div>
+
+ <div class="pf-btns">
+ <button class="pf-btn pf-btn-retry" id="drunk-retry-btn"
+ onclick="retryDrunk()" disabled>↺ Retry Test</button>
+ </div>
+ </div>
+ </div>
+</div>
+
+<!-- ══ VIEW 2 — FITNESS TEST ════════════════════════════════════ -->
+<div class="view" id="view-fitness">
+ <div class="fitness-wrap">
+
+ <div class="fit-cam-box">
+ <img id="fit-cam-img" src="" alt="Driver feed"/>
+ <div class="live-chip">● LIVE</div>
+ <div class="step-chip">STEP 2 / 2</div>
+ <div class="fit-cam-chip" id="fit-cam-chip">EAR — · HEAD —</div>
+ </div>
+
+ <div class="fit-panel">
+ <div>
+ <div class="pre-title">Fitness Assessment</div>
+ <div class="pre-step-label">● PRE-DRIVE ASSESSMENT · STEP 2 OF 2</div>
+ </div>
+
+ <div class="fit-checklist">
+ <div class="fit-step pending" id="fts-face_presence">
+ <div class="fit-step-icon">📷</div>
+ <div class="fit-step-body">
+ <div class="fit-step-label">Face Presence</div>
+ <div class="fit-step-detail" id="ftd-face_presence">Waiting…</div>
+ </div>
+ <div class="fit-step-badge">—</div>
+ </div>
+ <div class="fit-step pending" id="fts-head_position">
+ <div class="fit-step-icon">🧭</div>
+ <div class="fit-step-body">
+ <div class="fit-step-label">Head Position</div>
+ <div class="fit-step-detail" id="ftd-head_position">Waiting…</div>
+ </div>
+ <div class="fit-step-badge">—</div>
+ </div>
+ <div class="fit-step pending" id="fts-reaction_time">
+ <div class="fit-step-icon">⚡</div>
+ <div class="fit-step-body">
+ <div class="fit-step-label">Reaction Time</div>
+ <div class="fit-step-detail" id="ftd-reaction_time">Waiting…</div>
+ </div>
+ <div class="fit-step-badge">—</div>
+ </div>
+ <div class="fit-step pending" id="fts-breath_test">
+ <div class="fit-step-icon">💨</div>
+ <div class="fit-step-body">
+ <div class="fit-step-label">Active Breath Test</div>
+ <div class="fit-step-detail" id="ftd-breath_test">Waiting…</div>
+ </div>
+ <div class="fit-step-badge">—</div>
+ </div>
+ </div>
+
+ <div class="fit-score-row">
+ <span class="fit-score-lbl">SCORE</span>
+ <div class="fit-score-track">
+ <div class="fit-score-fill" id="fit-score-fill" style="width:0%"></div>
+ </div>
+ <span class="fit-score-val" id="fit-score-val">0 / 4</span>
+ </div>
+ <div class="fit-message" id="fit-message">Awaiting assessment start…</div>
+ <div class="fit-result" id="fit-result"></div>
+ </div>
+ </div>
+</div>
+
+<!-- ══ VIEW 3 — MAIN DASHBOARD ══════════════════════════════════ -->
+<div class="view" id="view-dashboard">
+<div class="layout">
+
+ <div class="panel">
+ <div class="phead">
+ <span class="ptitle">Driver Monitoring</span>
+ <span class="ptag" id="dfps-tag">MediaPipe · Face Landmarks</span>
+ </div>
+ <div class="pbody">
+ <div class="cam-wrap" id="driver-wrap">
+ <div class="cam-offline" id="driver-offline">
+ <div class="cam-offline-icon"></div>
+ <div class="cam-offline-txt">AWAITING FEED · Pi CSI</div>
+ </div>
+ <img id="driver-img" src="" style="display:none;" onload="resizeCanvas('driver')"/>
+ <canvas id="driver-canvas" class="cam-canvas"></canvas>
+ <div class="cam-scanlines"></div>
+ <div class="cam-chips">
+ <div class="chip">EAR <span class="v cv-ok" id="c-ear">—</span></div>
+ <div class="chip">MAR <span class="v cv-ok" id="c-mar">—</span></div>
+ <div class="chip">EYES <span class="v cv-ok" id="c-eye">—</span></div>
+ <div class="chip">YAWN <span class="v cv-ok" id="c-yawn">—</span></div>
+ </div>
+ <div class="combined-bar">
+ <span class="cb-label">FATIGUE</span>
+ <div class="cb-pips" id="cb-pips">
+ <div class="cb-pip" id="pip0"></div><div class="cb-pip" id="pip1"></div>
+ <div class="cb-pip" id="pip2"></div><div class="cb-pip" id="pip3"></div>
+ <div class="cb-pip" id="pip4"></div>
+ </div>
+ </div>
+ <div class="fatigue-bars">
+ <div class="fb-row"><span class="fb-label">DROWSY</span><div class="fb-track"><div class="fb-fill" id="fb-drowsy" style="width:0%;background:var(--orange)"></div></div><span class="fb-count" id="fc-drowsy">0</span></div>
+ <div class="fb-row"><span class="fb-label">YAWN</span><div class="fb-track"><div class="fb-fill" id="fb-yawn" style="width:0%;background:var(--yellow)"></div></div><span class="fb-count" id="fc-yawn">0</span></div>
+ <div class="fb-row"><span class="fb-label">NOD</span><div class="fb-track"><div class="fb-fill" id="fb-nod" style="width:0%;background:var(--red)"></div></div><span class="fb-count" id="fc-nod">0</span></div>
+ </div>
+ <div class="d-badge db-alert" id="d-badge">—</div>
+ </div>
+ </div>
+ </div>
+
+ <div class="panel">
+ <div class="phead">
+ <span class="ptitle">Road Monitoring</span>
+ <span style="display:flex;align-items:center;gap:8px;">
+ <span class="ptag" id="rfps-tag">YOLOv8n · Distance Est.</span>
+ <button class="stop-btn" id="stop-road-btn" onclick="stopRoadCam()" disabled>■ Stop</button>
+ </span>
+ </div>
+ <div class="pbody">
+ <div class="cam-wrap" id="road-wrap">
+ <div class="road-inactive" id="road-inactive">
+ <div class="road-inactive-icon">🛡️</div>
+ <div class="road-inactive-txt">Road Cam Inactive</div>
+ <div class="road-inactive-sub">Activates on first fatigue event</div>
+ </div>
+ <div class="cam-offline" id="road-offline" style="display:none;">
+ <div class="cam-offline-icon"></div>
+ <div class="cam-offline-txt">AWAITING FEED · USB CAM</div>
+ </div>
+ <img id="road-img" src="" style="display:none;" onload="resizeCanvas('road')"/>
+ <canvas id="road-canvas" class="cam-canvas"></canvas>
+ <div class="cam-scanlines"></div>
+ <div class="blind-badge" id="blind-badge">⚡ LEFT BLIND SPOT</div>
+ <div class="obj-count">Objects: <span id="c-objcount">0</span></div>
+ <div class="risk-badge" id="risk-badge" style="border-color:var(--green)">
+ <div class="rb-label">COLLISION RISK</div>
+ <div class="rb-track"><div class="rb-fill" id="rb-fill" style="width:10%;background:var(--green)"></div></div>
+ <div class="rb-val" id="rb-val" style="color:var(--green)">LOW</div>
+ </div>
+ <div class="dist-badge" id="dist-badge">
+ <div class="db-lbl">CLOSEST · TTC</div>
+ <div class="db-val" id="db-dist" style="color:var(--green)">—</div>
+ <div class="db-sub" id="db-ttc">TTC: —</div>
+ </div>
+ </div>
+ </div>
+ </div>
+
+ <div class="panel alerts-panel">
+ <div class="phead"><span class="ptitle">Active Alerts</span><span class="ptag">Auto-update · Real-time</span></div>
+ <div class="alerts-inner">
+ <div class="alert-card off" id="al-drowsy"><div class="ac-dot"></div><div class="ac-icon">😴</div><div class="ac-name">Drowsiness</div><div class="ac-desc" id="al-drowsy-desc">EAR monitor nominal</div></div>
+ <div class="alert-card off" id="al-yawn"><div class="ac-dot"></div><div class="ac-icon">🥱</div><div class="ac-name">Yawning</div><div class="ac-desc" id="al-yawn-desc">MAR monitor nominal</div></div>
+ <div class="alert-card off" id="al-collision"><div class="ac-dot"></div><div class="ac-icon">⚠️</div><div class="ac-name">Collision</div><div class="ac-desc" id="al-collision-desc">Risk level nominal</div></div>
+ <div class="alert-card off" id="al-blind"><div class="ac-dot"></div><div class="ac-icon">👁️</div><div class="ac-name">Blind Spot</div><div class="ac-desc" id="al-blind-desc">Blind spot clear</div></div>
+ <div class="alert-card off" id="al-noface"><div class="ac-dot"></div><div class="ac-icon">👤</div><div class="ac-name">No Driver</div><div class="ac-desc" id="al-noface-desc">Face detection active</div></div>
+ </div>
+ </div>
+
+ <div class="right-col">
+ <div class="panel">
+ <div class="phead"><span class="ptitle">System Status</span></div>
+ <div class="status-list">
+ <div class="srow" id="sr-dcam"><span class="sn">Driver Camera</span><span class="sv">—</span></div>
+ <div class="srow" id="sr-rcam"><span class="sn">Road Camera</span><span class="sv">—</span></div>
+ <div class="srow" id="sr-ai"> <span class="sn">AI Inference</span><span class="sv">—</span></div>
+ <div class="srow" id="sr-pi"> <span class="sn">Raspberry Pi</span><span class="sv">—</span></div>
+ </div>
+ </div>
+ <div class="panel">
+ <div class="phead"><span class="ptitle">Live Metrics</span></div>
+ <div class="metrics-grid">
+ <div class="mc"><div class="mc-lbl">Driver FPS</div><div class="mc-val" id="m-dfps">—</div><div class="mc-unit">frames/sec</div><div class="mc-bar"><div class="mc-bar-fill" id="mb-dfps" style="width:0%;background:var(--green)"></div></div></div>
+ <div class="mc"><div class="mc-lbl">Road FPS</div><div class="mc-val" id="m-rfps">—</div><div class="mc-unit">frames/sec</div><div class="mc-bar"><div class="mc-bar-fill" id="mb-rfps" style="width:0%;background:var(--green)"></div></div></div>
+ <div class="mc"><div class="mc-lbl">EAR</div><div class="mc-val" id="m-ear">—</div><div class="mc-unit">eye aspect ratio</div><div class="mc-bar"><div class="mc-bar-fill" id="mb-ear" style="width:0%;background:var(--green)"></div></div></div>
+ <div class="mc"><div class="mc-lbl">Closest</div><div class="mc-val" id="m-closest">—</div><div class="mc-unit" id="m-closest-lbl">no objects</div><div class="mc-bar"><div class="mc-bar-fill" id="mb-closest" style="width:0%;background:var(--green)"></div></div></div>
+ </div>
+ <div class="uptime-bar">
+ <span class="uptime-lbl">UPTIME</span>
+ <span class="uptime-val" id="m-uptime">00:00:00</span>
+ </div>
+ </div>
+ <div class="panel" style="flex:1;min-height:0;">
+ <div class="phead"><span class="ptitle">Detected Objects</span><span class="ptag">Distance · Blind Spot</span></div>
+ <div class="obj-list" id="obj-list"><div class="obj-empty">Road cam inactive</div></div>
+ </div>
+ </div>
+
+</div>
+</div>
+
+<script>
+let socket=null,piBase='',latestTelemetry=null,currentView=null;
+
+setInterval(()=>{document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);},1000);
+
+function fmtUptime(s){
+ return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
+function resizeCanvas(cam){
+ const img=document.getElementById(cam+'-img'),canvas=document.getElementById(cam+'-canvas');
+ if(!img||!canvas)return;
+ canvas.width=img.clientWidth||img.naturalWidth;canvas.height=img.clientHeight||img.naturalHeight;
+}
+window.addEventListener('resize',()=>{resizeCanvas('driver');resizeCanvas('road');});
+
+// ── VIEW SWITCHER ──────────────────────────────────────────────
+function showView(id){
+ document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+ document.getElementById(id).classList.add('active');
+ currentView=id;
+ // Update header subtitle
+ const subs={
+ 'view-drunk':'● Pre-Drive Assessment · Alcohol Check',
+ 'view-fitness':'● Pre-Drive Assessment · Fitness Tests',
+ 'view-dashboard':'● Offline inference · Raspberry Pi 5 · MediaPipe + YOLOv8n · Distance Estimation'
+ };
+ document.getElementById('h-sub-text').textContent=subs[id]||'';
+}
+
+// ── CONNECT ────────────────────────────────────────────────────
+function connect(){
+ const ip=document.getElementById('pi-ip').value.trim();
+ const port=document.getElementById('pi-port').value.trim()||'5050';
+ if(!ip){setConnStatus('Enter the Pi IP address','cs-err');return;}
+ piBase=`http://${ip}:${port}`;
+ setConnStatus('Connecting…','cs-wait');
+ if(socket)socket.disconnect();
+ socket=io(piBase,{transports:['websocket'],timeout:5000});
+
+ socket.on('connect',()=>{
+ setConnStatus('','');
+ document.getElementById('modal-overlay').style.display='none';
+ document.getElementById('pi-label').textContent=`${ip}:${port} ✕`;
+ const ind=document.getElementById('live-indicator');
+ ind.textContent='Live';ind.classList.add('connected');
+ setSystemRows(true);
+ startCanvasLoops();
+ showView('view-drunk');
+ });
+
+ socket.on('disconnect',()=>{setLiveOff();setSystemRows(false);});
+ socket.on('connect_error',()=>{setConnStatus(`Cannot reach ${ip}:${port}`,'cs-err');setLiveOff();});
+
+ socket.on('telemetry',d=>{
+ latestTelemetry=d;
+
+ // ── Auto-sync view from fitness phase (handles late connect) ──
+ if(d.fitness_phase==='running' || d.fitness_phase==='done'){
+ const steps = d.fitness_steps || {};
+ const drunk = steps['drunk_check'] || {};
+ const face = steps['face_presence'] || {};
+ const fitnessStarted = ['running','pass','fail'].includes(face.status);
+ const drunkPassed = drunk.status === 'pass';
+
+ if(currentView==='view-drunk' || currentView===null){
+ if(currentView===null){
+ // Late connect — show drunk view first and start feed
+ showView('view-drunk');
+ startDrunkFeed();
+ }
+ if(fitnessStarted && drunkPassed){
+ transitionToFitness();
+ }
+ }
+ if(d.fitness_phase==='done' && d.fitness_result==='pass' &&
+ currentView!=='view-dashboard'){
+ transitionToDashboard();
+ }
+ }
+
+ if(currentView==='view-dashboard') updateDashboard(d);
+ if(currentView==='view-fitness') updateFitnessView(d);
+ if(currentView==='view-drunk') updateDrunkFromTelemetry(d);
+ });
+
+ socket.on('road_cam_started',()=>showRoadFeed());
+ socket.on('road_cam_stopped',()=>hideRoadFeed());
+
+ // ── Drunk events ─────────────────────────────────────────────
+ socket.on('drunk_test_started',()=>{
+ showView('view-drunk');
+ startDrunkFeed();
+ setDrunkInstruction('Observing… please sit naturally.');
+ });
+
+ socket.on('drunk_detected',()=>{
+ setSensor('fail','ALCOHOL DETECTED','Supervisor notified — click Retry to retest');
+ setDrunkInstruction('⚠ Alcohol detected. Use the Retry button to retest.');
+ document.getElementById('drunk-retry-btn').disabled=false;
+ });
+
+ socket.on('drunk_test_pass',()=>{
+ setSensor('pass','CLEAR','No alcohol detected');
+ setDrunkInstruction('✓ Passed — moving to fitness assessment…');
+ document.getElementById('drunk-retry-btn').disabled=true;
+ setTimeout(()=>transitionToFitness(),2000);
+ });
+
+ // ── Fitness events ────────────────────────────────────────────
+ socket.on('fitness_started',()=>{
+ // already transitioned by drunk_test_pass
+ });
+
+ socket.on('fitness_done',d=>{
+ const r=document.getElementById('fit-result');
+ if(d.result==='pass'){
+ r.className='fit-result pass';
+ r.textContent='✓ ALL CHECKS PASSED — STARTING MONITORING';
+ r.style.display='block';
+ setTimeout(()=>transitionToDashboard(),2500);
+ } else {
+ r.className='fit-result fail';
+ r.textContent='✗ ASSESSMENT FAILED — DRIVE BLOCKED';
+ r.style.display='block';
+ }
+ });
+}
+
+// ── DRUNK VIEW ─────────────────────────────────────────────────
+function setDrunkInstruction(txt){
+ document.getElementById('drunk-instruction').textContent=txt;
+}
+
+function setSensor(state,val,detail){
+ const box=document.getElementById('drunk-sensor-box');
+ box.className='sensor-box '+state;
+ document.getElementById('drunk-sensor-val').textContent=val;
+ document.getElementById('drunk-sensor-detail').textContent=detail;
+}
+
+function updateDrunkFromTelemetry(d){
+ if(!d||!d.fitness_steps) return;
+ const drunk = d.fitness_steps['drunk_check'];
+ const pres = d.fitness_steps['driver_presence'];
+ if(!drunk) return;
+
+ // Update instruction based on step status
+ if(drunk.status==='running'){
+ setSensor('testing','OBSERVING…', drunk.detail||'Passive observation in progress…');
+ setDrunkInstruction('Please sit naturally — system is observing.');
+ } else if(drunk.status==='pass'){
+ setSensor('pass','CLEAR', drunk.detail||'No alcohol detected');
+ setDrunkInstruction('✓ Passed — moving to fitness assessment…');
+ } else if(drunk.status==='fail'){
+ setSensor('fail','DETECTED', drunk.detail||'Alcohol detected');
+ setDrunkInstruction('⚠ Alcohol detected. Use the Retry button to retest.');
+ document.getElementById('drunk-retry-btn').disabled=false;
+ }
+
+ // Show face presence status too
+ if(pres && pres.status==='fail'){
+ setDrunkInstruction('No face detected — please look at the camera.');
+ }
+}
+
+function retryDrunk(){
+ if(socket)socket.emit('retry_drunk',{});
+ document.getElementById('drunk-retry-btn').disabled=true;
+ setSensor('idle','STANDBY','Preparing retest…');
+ setDrunkInstruction('Retry requested — get ready to blow again…');
+}
+
+// ── FITNESS VIEW ───────────────────────────────────────────────
+const FIT_STEPS=['face_presence','head_position','reaction_time','breath_test'];
+const FIT_BADGE={pending:'—',running:'●',pass:'PASS',fail:'FAIL'};
+
+function transitionToFitness(){
+ if(currentView==='view-fitness') return; // already there
+ showView('view-fitness');
+ const img=document.getElementById('fit-cam-img');
+ if(!img.src || img.src===window.location.href)
+ img.src=`${piBase}/stream/driver`;
+}
+
+function startDrunkFeed(){
+ const img=document.getElementById('drunk-cam-img');
+ if(!img.src || img.src===window.location.href){
+ img.src=`${piBase}/stream/driver`;
+ }
+ img.style.display='block';
+ document.getElementById('drunk-offline').style.display='none';
+ document.getElementById('drunk-live-chip').style.display='block';
+}
+
+function updateFitnessView(d){
+ if(!d.fitness_steps) return;
+ FIT_STEPS.forEach(id=>{
+ const row=document.getElementById('fts-'+id);
+ const det=document.getElementById('ftd-'+id);
+ if(!row||!d.fitness_steps[id]) return;
+ const s=d.fitness_steps[id];
+ row.className='fit-step '+(s.status||'pending');
+ det.textContent=s.detail||'Waiting…';
+ row.querySelector('.fit-step-badge').textContent=FIT_BADGE[s.status]||'—';
+ });
+ const score=d.fitness_score||0;
+ const pct=(score/4)*100;
+ const col=score>=4?'var(--green)':score>=2?'var(--yellow)':'var(--red)';
+ document.getElementById('fit-score-fill').style.width=pct+'%';
+ document.getElementById('fit-score-fill').style.background=col;
+ document.getElementById('fit-score-val').textContent=score+' / 4';
+ document.getElementById('fit-message').textContent=d.fitness_message||'';
+ if(d.ear) document.getElementById('fit-cam-chip').textContent=
+ `EAR ${d.ear.toFixed(3)} · ${d.eye_status||'—'}`;
+}
+
+// ── DASHBOARD TRANSITION ───────────────────────────────────────
+function transitionToDashboard(){
+ showView('view-dashboard');
+ document.getElementById('drunk-cam-img').src='';
+ document.getElementById('fit-cam-img').src='';
+ const dImg=document.getElementById('driver-img');
+ dImg.src=`${piBase}/stream/driver`;
+ dImg.style.display='block';
+ document.getElementById('driver-offline').style.display='none';
+ document.getElementById('h-sub-text').textContent=
+ '● Offline inference · Raspberry Pi 5 · MediaPipe + YOLOv8n · Distance Estimation';
+}
+
+// ── HELPERS ────────────────────────────────────────────────────
+function setConnStatus(msg,cls){const el=document.getElementById('conn-status');el.textContent=msg;el.className=cls;}
+function disconnect(){
+ if(socket)socket.disconnect();
+ document.getElementById('modal-overlay').style.display='flex';
+ document.getElementById('driver-img').style.display='none';
+ document.getElementById('driver-offline').style.display='flex';
+ hideRoadFeed();setConnStatus('','');showView('view-drunk');
+}
+function setLiveOff(){const ind=document.getElementById('live-indicator');ind.textContent='Disconnected';ind.classList.remove('connected');}
+function setSystemRows(online){
+ setRow('sr-dcam',online?'ok':'err',online?'Online':'Offline');
+ setRow('sr-rcam',online?'warn':'err',online?'Waiting':'Offline');
+ setRow('sr-ai',online?'ok':'err',online?'Running':'Stopped');
+ setRow('sr-pi',online?'ok':'err',online?'● Active':'Offline');
+}
+function setRow(id,cls,txt){const el=document.getElementById(id);el.className='srow '+cls;el.querySelector('.sv').textContent=txt;}
+
+// ── ROAD CAM ───────────────────────────────────────────────────
+function showRoadFeed(){
+ const rImg=document.getElementById('road-img');
+ rImg.src=`${piBase}/stream/road`;rImg.style.display='block';
+ document.getElementById('road-inactive').style.display='none';
+ document.getElementById('road-offline').style.display='none';
+ document.getElementById('stop-road-btn').disabled=false;
+ setRow('sr-rcam','ok','Active');
+}
+function hideRoadFeed(){
+ const rImg=document.getElementById('road-img');
+ rImg.src='';rImg.style.display='none';
+ document.getElementById('road-inactive').style.display='flex';
+ document.getElementById('stop-road-btn').disabled=true;
+ setRow('sr-rcam','warn','Waiting');
+ const rc=document.getElementById('road-canvas');
+ if(rc)rc.getContext('2d').clearRect(0,0,rc.width,rc.height);
+ document.getElementById('obj-list').innerHTML='<div class="obj-empty">Road cam inactive</div>';
+ document.getElementById('db-dist').textContent='—';
+ document.getElementById('db-ttc').textContent='TTC: —';
+ document.getElementById('blind-badge').className='blind-badge';
+}
+function stopRoadCam(){fetch(`${piBase}/stop_road`,{method:'POST'}).catch(()=>{});hideRoadFeed();}
+
+// ── CANVAS LOOPS ───────────────────────────────────────────────
+function startCanvasLoops(){
+ (function driverLoop(){
+ if(latestTelemetry&&currentView==='view-dashboard') drawDriverCanvas(latestTelemetry);
+ requestAnimationFrame(driverLoop);
+ })();
+ (function roadLoop(){
+ if(latestTelemetry&&latestTelemetry.road_cam_active&&currentView==='view-dashboard') drawRoadCanvas(latestTelemetry);
+ requestAnimationFrame(roadLoop);
+ })();
+}
+
+function drawDriverCanvas(d){
+ const canvas=document.getElementById('driver-canvas'),img=document.getElementById('driver-img');
+ if(!canvas||!img||!img.clientWidth)return;
+ if(canvas.width!==img.clientWidth||canvas.height!==img.clientHeight){canvas.width=img.clientWidth;canvas.height=img.clientHeight;}
+ const ctx=canvas.getContext('2d'),cw=canvas.width,ch=canvas.height;
+ const scX=cw/(d.stream_w||640),scY=ch/(d.stream_h||480);
+ ctx.clearRect(0,0,cw,ch);
+ const L_EYE=[33,160,158,133,153,144],R_EYE=[362,385,387,263,373,380];
+ const MOUTH=[78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
+ if(d.landmarks&&d.landmarks.length===478){
+ const pts=d.landmarks;
+ ctx.fillStyle='rgba(0,255,100,0.4)';
+ for(const[x,y]of pts){ctx.beginPath();ctx.arc(x*scX,y*scY,0.8,0,Math.PI*2);ctx.fill();}
+ const ec=d.eye_status==='Closed'?'rgba(255,45,85,0.9)':'rgba(0,200,255,0.8)';
+ drawPolyline(ctx,pts,[...L_EYE,L_EYE[0]],scX,scY,ec,1.5);
+ drawPolyline(ctx,pts,[...R_EYE,R_EYE[0]],scX,scY,ec,1.5);
+ ctx.fillStyle=ec;
+ for(const i of[...L_EYE,...R_EYE]){const[x,y]=pts[i];ctx.beginPath();ctx.arc(x*scX,y*scY,2.5,0,Math.PI*2);ctx.fill();}
+ drawPolyline(ctx,pts,[...MOUTH,MOUTH[0]],scX,scY,d.yawn?'rgba(245,196,0,0.9)':'rgba(120,90,180,0.6)',1.5);
+ const[nx,ny]=pts[1];
+ ctx.fillStyle=d.head_nod?'#FF2D55':'rgba(180,180,180,0.7)';
+ ctx.beginPath();ctx.arc(nx*scX,ny*scY,5,0,Math.PI*2);ctx.fill();
+ }
+ const st=d.driver_status||'';
+ if(st&&st!=='Alert'){
+ const col=st==='Critical'?'#FF2D55':st==='Drowsy'?'#FF8C00':st==='Yawning'?'#F5C400':'#6B5C8A';
+ ctx.font='bold 13px "Barlow Condensed",sans-serif';ctx.textAlign='center';
+ const tw=ctx.measureText(st).width;
+ ctx.fillStyle='rgba(10,7,22,0.75)';ctx.fillRect(cw/2-tw/2-10,ch/2-22,tw+20,28);
+ ctx.fillStyle=col;ctx.fillText(st.toUpperCase(),cw/2,ch/2-2);ctx.textAlign='left';
+ }
+}
+
+function drawRoadCanvas(d){
+ const canvas=document.getElementById('road-canvas'),img=document.getElementById('road-img');
+ if(!canvas||!img||!img.clientWidth)return;
+ if(canvas.width!==img.clientWidth||canvas.height!==img.clientHeight){canvas.width=img.clientWidth;canvas.height=img.clientHeight;}
+ const ctx=canvas.getContext('2d'),cw=canvas.width,ch=canvas.height;
+ ctx.clearRect(0,0,cw,ch);
+ if(!d.objects||!d.objects.length)return;
+ for(const obj of d.objects){
+ const{label,distance,blind_spot:bs,box,frame_w,frame_h}=obj;
+ if(!box)continue;
+ const scX=cw/(frame_w||640),scY=ch/(frame_h||480);
+ const isH=distance!==undefined&&distance<3,isM=distance!==undefined&&distance<5&&!isH;
+ const color=isH?'#FF2D55':isM?'#FF8C00':'#00E87A';
+ const[x1,y1,x2,y2]=box;
+ const bx=x1*scX,by=y1*scY,bw2=(x2-x1)*scX,bh2=(y2-y1)*scY;
+ ctx.shadowColor=color;ctx.shadowBlur=isH?18:isM?10:5;
+ ctx.strokeStyle=color;ctx.lineWidth=isH?2.5:1.5;ctx.strokeRect(bx,by,bw2,bh2);ctx.shadowBlur=0;
+ const dt=distance!==undefined&&distance<999?`${label} ${distance.toFixed(1)}m`:label;
+ ctx.font='700 11px "Space Mono",monospace';ctx.textAlign='left';
+ const tw=ctx.measureText(dt).width;
+ ctx.fillStyle=color;ctx.fillRect(bx,by-18,tw+10,18);
+ ctx.fillStyle='#000';ctx.fillText(dt,bx+5,by-4);
+ if(bs&&bs!=='CENTER'){
+ const tag=bs==='LEFT'?'◄ BS':'BS ►';
+ ctx.font='700 9px "Space Mono",monospace';
+ const tw2=ctx.measureText(tag).width;
+ ctx.fillStyle='rgba(245,196,0,0.9)';ctx.fillRect(bx,by+bh2,tw2+8,15);
+ ctx.fillStyle='#000';ctx.fillText(tag,bx+4,by+bh2+11);
+ }
+ }
+}
+
+function drawPolyline(ctx,pts,indices,scX,scY,color,lw){
+ ctx.strokeStyle=color;ctx.lineWidth=lw;ctx.beginPath();
+ const[sx,sy]=pts[indices[0]];ctx.moveTo(sx*scX,sy*scY);
+ for(let i=1;i<indices.length;i++){const[x,y]=pts[indices[i]];ctx.lineTo(x*scX,y*scY);}
+ ctx.stroke();
+}
+
+// ── MAIN TELEMETRY ─────────────────────────────────────────────
+function updateDashboard(d){
+ const earOk=d.ear>=0.25,marOk=d.mar<0.50;
+ setText('c-ear',d.ear.toFixed(3),earOk?'cv-ok':'cv-danger');
+ setText('c-mar',d.mar.toFixed(3),marOk?'cv-ok':'cv-warn');
+ setText('c-eye',d.eye_status,d.eye_status==='Open'?'cv-ok':'cv-danger');
+ setText('c-yawn',d.yawn?'YES':'NO',d.yawn?'cv-warn':'cv-ok');
+ setText('m-ear',d.ear.toFixed(3));
+ setBar('mb-ear',Math.min(d.ear/0.5*100,100),earOk?'var(--green)':'var(--red)');
+ document.getElementById('m-ear').style.color=earOk?'var(--green)':'var(--red)';
+ const closest=d.closest_distance,closestObj=d.closest_object||'None';
+ if(closest!==null&&closest!==undefined){
+ const isH=closest<3,isM=closest<5;
+ const cc=isH?'var(--red)':isM?'var(--yellow)':'var(--green)';
+ document.getElementById('m-closest').textContent=closest.toFixed(1)+'m';
+ document.getElementById('m-closest').style.color=cc;
+ document.getElementById('m-closest-lbl').textContent=closestObj;
+ setBar('mb-closest',Math.max(0,Math.min(100,(1-closest/20)*100)),cc);
+ }else{
+ document.getElementById('m-closest').textContent='—';
+ document.getElementById('m-closest').style.color='var(--yellow)';
+ document.getElementById('m-closest-lbl').textContent='no objects';
+ setBar('mb-closest',0,'var(--green)');
+ }
+ const badge=document.getElementById('d-badge');
+ badge.textContent=d.driver_status;
+ badge.className='d-badge '+(d.driver_status==='Alert'?'db-alert':d.driver_status==='Yawning'?'db-warn':d.driver_status==='Drowsy'?'db-danger':d.driver_status==='Critical'?'db-danger':d.driver_status==='Head Nod'?'db-warn':'db-noface');
+ const lim=5;
+ setBar('fb-drowsy',(d.drowsiness_events/lim)*100,'var(--orange)');
+ setBar('fb-yawn',(d.yawn_events/lim)*100,'var(--yellow)');
+ setBar('fb-nod',(d.head_nod_events/lim)*100,'var(--red)');
+ document.getElementById('fc-drowsy').textContent=d.drowsiness_events;
+ document.getElementById('fc-yawn').textContent=d.yawn_events;
+ document.getElementById('fc-nod').textContent=d.head_nod_events;
+ for(let i=0;i<5;i++)document.getElementById('pip'+i).className='cb-pip'+(i<d.combined_events?' filled':'');
+ setText('m-dfps',d.driver_fps);setBar('mb-dfps',Math.min(d.driver_fps/30*100,100),d.driver_fps<10?'var(--yellow)':'var(--green)');
+ setText('m-rfps',d.road_fps);setBar('mb-rfps',Math.min(d.road_fps/30*100,100),d.road_fps<10?'var(--yellow)':'var(--green)');
+ document.getElementById('dfps-tag').textContent=`MediaPipe · ${d.driver_fps} FPS`;
+ document.getElementById('rfps-tag').textContent=d.road_cam_active?`YOLOv8n · ${d.road_fps} FPS · Dist Est.`:'YOLOv8n · Gated';
+ setRow('sr-dcam',d.driver_fps>0?'ok':'warn',d.driver_fps>0?`${d.driver_fps} fps`:'No signal');
+ setRow('sr-rcam',d.road_cam_active?(d.road_fps>0?'ok':'warn'):'warn',d.road_cam_active?(d.road_fps>0?`${d.road_fps} fps`:'Starting…'):'Waiting');
+ setRow('sr-ai','ok','Running');setRow('sr-pi','ok',`↑ ${fmtUptime(d.uptime)}`);
+ if(d.road_cam_active){const rImg=document.getElementById('road-img');if(rImg.style.display==='none')showRoadFeed();}
+ const riskColor=d.collision_risk==='HIGH'?'var(--red)':d.collision_risk==='MEDIUM'?'var(--yellow)':'var(--green)';
+ const riskPct=d.collision_risk==='HIGH'?92:d.collision_risk==='MEDIUM'?52:12;
+ document.getElementById('rb-fill').style.width=riskPct+'%';document.getElementById('rb-fill').style.background=riskColor;
+ document.getElementById('rb-val').style.color=riskColor;document.getElementById('rb-val').textContent=d.collision_risk;
+ document.getElementById('risk-badge').style.borderColor=riskColor;
+ const distEl=document.getElementById('db-dist'),ttcEl=document.getElementById('db-ttc');
+ const distBadge=document.getElementById('dist-badge');
+ if(d.road_cam_active&&closest!==null&&closest!==undefined){
+ const isH=closest<3,isM=closest<5,dc=isH?'var(--red)':isM?'var(--yellow)':'var(--green)';
+ distEl.textContent=closest.toFixed(1)+'m';distEl.style.color=dc;distBadge.style.borderColor=dc;
+ ttcEl.textContent=d.ttc?`TTC: ${d.ttc}s`:'TTC: —';ttcEl.style.color=d.ttc&&d.ttc<2.5?'var(--red)':'var(--muted)';
+ }else{distEl.textContent='—';distEl.style.color='var(--green)';distBadge.style.borderColor='var(--border)';ttcEl.textContent='TTC: —';ttcEl.style.color='var(--muted)';}
+ const blindBadge=document.getElementById('blind-badge'),blindStatus=d.blind_spot||'CLEAR';
+ if(d.road_cam_active&&blindStatus!=='CLEAR'){blindBadge.textContent=blindStatus==='LEFT'?'◄ LEFT BLIND SPOT':'RIGHT BLIND SPOT ►';blindBadge.className='blind-badge visible';}
+ else{blindBadge.className='blind-badge';}
+ document.getElementById('c-objcount').textContent=d.road_cam_active?(d.object_count||d.objects.length):0;
+ const ol=document.getElementById('obj-list');
+ if(!d.road_cam_active){ol.innerHTML='<div class="obj-empty">Road cam inactive</div>';}
+ else if(!d.objects||!d.objects.length){ol.innerHTML='<div class="obj-empty">No objects detected</div>';}
+ else{
+ ol.innerHTML=[...d.objects].sort((a,b)=>(a.distance||999)-(b.distance||999)).map(o=>{
+ const dist=o.distance!==undefined&&o.distance<999?o.distance:null;
+ const isH=dist!==null&&dist<3,isM=dist!==null&&dist<5&&!isH;
+ const cls=isH?'obj-risk-high':isM?'obj-risk-med':'obj-risk-low';
+ const dl=dist!==null?`${dist.toFixed(1)}m`:'—';
+ const bt=(o.blind_spot&&o.blind_spot!=='CENTER')?`<span class="obj-blind">${o.blind_spot}</span>`:'';
+ return `<div class="obj-row ${cls}"><span class="obj-name">${o.label}</span><div class="obj-right">${bt}<span class="obj-dist">${dl}</span></div></div>`;
+ }).join('');
+ }
+ document.getElementById('m-uptime').textContent=fmtUptime(d.uptime);
+ setAlert('al-drowsy',d.driver_status==='Drowsy'||d.driver_status==='Critical',d.driver_status==='Critical'?'danger':'warn',
+ d.driver_status==='Drowsy'?`EAR ${d.ear.toFixed(3)} · Eyes closing`:d.driver_status==='Critical'?`CRITICAL · ${d.combined_events}/5 events`:'EAR monitor nominal');
+ setAlert('al-yawn',d.yawn,'warn',d.yawn?`MAR ${d.mar.toFixed(3)} · Yawn detected`:'MAR monitor nominal');
+ setAlert('al-collision',d.collision_risk!=='LOW',d.collision_risk==='HIGH'?'danger':'warn',
+ d.collision_risk!=='LOW'?`${d.collision_risk} · ${closest!==null?closest.toFixed(1)+'m':'—'} · ${d.objects.length} obj`:'Risk level nominal');
+ const bsActive=d.road_cam_active&&blindStatus!=='CLEAR';
+ setAlert('al-blind',bsActive,'warn',bsActive?`${blindStatus} blind spot detected`:'Blind spot clear');
+ setAlert('al-noface',!d.driver_present,'warn',!d.driver_present?'No face landmarks found':'Face detection active');
+}
+
+function setText(id,val,cls){const el=document.getElementById(id);if(!el)return;el.textContent=val;if(cls)el.className='v '+cls;}
+function setBar(id,pct,color){const el=document.getElementById(id);if(!el)return;el.style.width=Math.max(0,Math.min(100,pct))+'%';el.style.background=color;}
+function setAlert(id,active,type,desc){
+ const card=document.getElementById(id);if(!card)return;
+ card.className='alert-card '+(active?type:'off');
+ const d=document.getElementById(id+'-desc');if(d)d.textContent=desc;
+}
+</script>
+</body>
+</html>
